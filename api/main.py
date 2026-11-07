@@ -12,9 +12,9 @@ from typing import List, Optional
 from api.model_service import (
     load_forecasts, get_available_nodes, get_forecast_for_node,
     get_full_hierarchy_snapshot, ingest_actual, get_ingested_history,
-    get_evaluation_summary
+    get_evaluation_summary, get_schedule_recommendation, get_pooling_benefit
 )
-from api.schemas import IngestPayload
+from api.schemas import IngestPayload, ScheduleRequest, ScheduleRecommendation, PoolingBenefitResponse
 
 
 class ConnectionManager:
@@ -104,6 +104,37 @@ def evaluation_summary():
     if not summary:
         raise HTTPException(status_code=404, detail="No evaluation results found. Run backtest first.")
     return summary
+
+
+@app.post("/schedule/recommend", response_model=ScheduleRecommendation)
+def schedule_recommend(request: ScheduleRequest):
+    """
+    Get cost-optimal schedule recommendation for a node.
+    Returns the MW value to submit that minimizes expected DSM penalty.
+    """
+    try:
+        result = get_schedule_recommendation(
+            node_id=request.node_id,
+            date=request.date,
+            normal_rate=request.normal_rate
+        )
+        return result
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/schedule/pooling-benefit")
+def schedule_pooling_benefit(normal_rate: Optional[float] = Query(None, description="Normal rate in INR/MWh")):
+    """
+    Compute the DSM penalty savings from hierarchical pooling vs standalone scheduling.
+    """
+    try:
+        result = get_pooling_benefit(normal_rate=normal_rate)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/ingest")

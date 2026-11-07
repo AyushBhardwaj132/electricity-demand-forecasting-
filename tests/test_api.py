@@ -67,3 +67,29 @@ def test_evaluation_summary_endpoint():
     assert 7 in data.get("horizons", [])
     assert 14 in data.get("horizons", [])
     assert 30 in data.get("horizons", [])
+
+
+def test_schedule_recommend_endpoint():
+    """Verify POST /schedule/recommend returns cost-optimal schedule."""
+    payload = {
+        "node_id": "India",
+        "date": "2025-01-05",
+        "normal_rate": 4000.0
+    }
+    response = client.post("/schedule/recommend", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "optimal_schedule_mw" in data
+    assert "schedule_bias_mw" in data
+    assert data["node_id"] == "India"
+    assert data["optimal_schedule_mw"] > 0
+
+
+def test_pooling_benefit_endpoint():
+    """Verify GET /schedule/pooling-benefit returns regional savings."""
+    response = client.get("/schedule/pooling-benefit")
+    assert response.status_code == 200
+    data = response.json()
+    assert "summary" in data
+    assert "by_region" in data
+    assert data["summary"]["total_savings_inr"] >= 0.0

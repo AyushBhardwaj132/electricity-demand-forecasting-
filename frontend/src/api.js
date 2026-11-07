@@ -71,3 +71,23 @@ export async function getIngestHistory() {
   if (!res.ok) throw new Error(`Failed to load ingest history: HTTP ${res.status}`);
   return res.json();
 }
+
+export async function getScheduleRecommendation(nodeId, date = null, normalRate = 4000.0) {
+  const payload = { node_id: nodeId, normal_rate: Number(normalRate) };
+  if (date) payload.date = date;
+
+  const res = await fetch(`${API_BASE}/schedule/recommend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to get schedule recommendation: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function getPoolingBenefit(normalRate = 4000.0) {
+  const url = normalRate ? `${API_BASE}/schedule/pooling-benefit?normal_rate=${encodeURIComponent(normalRate)}` : `${API_BASE}/schedule/pooling-benefit`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to get pooling benefit: HTTP ${res.status}`);
+  return res.json();
+}

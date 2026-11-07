@@ -22,7 +22,8 @@ METHOD_COL_MAP = {
     "Base LightGBM": "LGBM",
     "Bottom-Up": "LGBM/BottomUp",
     "Top-Down": "LGBM/TopDown_method-forecast_proportions",
-    "MinT-Shrink": "LGBM/MinTrace_method-mint_shrink"
+    "MinT-Shrink": "LGBM/MinTrace_method-mint_shrink",
+    "Cost-Aware MinT": "CostAware_MinT"
 }
 
 
@@ -132,6 +133,7 @@ def get_forecast_for_node(node_id: str, horizon: Optional[int] = None) -> List[D
         bu_val = round(float(row.get("LGBM/BottomUp", base_val)), 2)
         td_val = round(float(row.get("LGBM/TopDown_method-forecast_proportions", base_val)), 2)
         mint_val = round(float(row.get("LGBM/MinTrace_method-mint_shrink", row.get("reconciled_forecast", base_val))), 2)
+        cost_aware_val = round(float(row.get("CostAware_MinT", mint_val)), 2)
 
         results.append({
             "date": d_str,
@@ -141,11 +143,13 @@ def get_forecast_for_node(node_id: str, horizon: Optional[int] = None) -> List[D
             "bottom_up": bu_val,
             "top_down": td_val,
             "mint_shrink": mint_val,
+            "cost_aware_mint": cost_aware_val,
             "methods": {
                 "Base LightGBM": base_val,
                 "Bottom-Up": bu_val,
                 "Top-Down": td_val,
-                "MinT-Shrink": mint_val
+                "MinT-Shrink": mint_val,
+                "Cost-Aware MinT": cost_aware_val
             }
         })
     return results
@@ -309,3 +313,123 @@ def ingest_actual(node_id: str, date: str, actual_value: float) -> Dict:
 def get_ingested_history() -> List[Dict]:
     """Return all ingested telemetry records for the active session."""
     return _ingested_actuals
+
+
+# ---------------------------------------------------------------------------
+# Schedule Recommendation & Pooling Benefit Service Functions
+# ---------------------------------------------------------------------------
+
+def get_schedule_recommendation(
+    node_id: str,
+    date: Optional[str] = None,
+    normal_rate: Optional[float] = None
+) -> Dict:
+    """
+    Compute cost-optimal schedule recommendation for a node on a given date.
+    """
+    from src.scheduler import compute_optimal_schedule
+    from src.penalties import DEFAULT_NORMAL_RATE
+
+    global _forecast_data
+    if _forecast_data is None:
+        load_forecasts()
+
+    nr = normal_rate if normal_rate is not None else DEFAULT_NORMAL_RATE
+
+    # Find matching rows for node
+    sub = _forecast_data[_forecast_data["unique_id"] == node_id]
+    if len(sub) == 0:
+        matches = _forecast_data[_forecast_data["unique_id"].str.endswith(node_id)]
+        if len(matches) == 0:
+            raise KeyError(f"Node '{node_id}' not found.")
+        sub = matches
+
+    if date is not None:
+        row = sub[sub["ds"] == date]
+        if len(row) == 0:
+            raise KeyError(f"No forecast found for node '{node_id}' on date '{date}'.")
+    else:
+        # Default to latest forecast date
+        row = sub.sort_values("ds").tail(1)
+        if len(row) == 0:
+            raise KeyError(f"No forecast entries found for node '{node_id}'.")
+        date = str(row.iloc[0]["ds"])
+
+    target_row = row.iloc[0]
+    matched_uid = str(target_row["unique_id"])
+
+    # Determine forecast value
+    fcst_val = float(target_row.get("reconciled_forecast", target_row.get("base_forecast", 100.0)))
+
+    # Estimate uncertainty: if historical actuals available, compute residual std
+    node_actuals = _actuals_lookup.get(matched_uid, {})
+    if len(node_actuals) >= 10:
+        actual_vals = np.array(list(node_actuals.values()))
+        std_val = max(1.0, float(np.std(actual_vals) * 0.05))
+    else:
+        std_val = max(1.0, fcst_val * 0.05)
+
+    rec = compute_optimal_schedule(
+        point_forecast_mw=fcst_val,
+        forecast_std_mw=std_val,
+        normal_rate=nr
+    )
+
+    return {
+        "node_id": matched_uid,
+        "date": date,
+        "point_forecast_mw": rec["point_forecast_mw"],
+        "forecast_std_mw": rec["forecast_std_mw"],
+        "optimal_schedule_mw": rec["optimal_schedule_mw"],
+        "schedule_bias_mw": rec["schedule_bias_mw"],
+        "schedule_bias_pct": rec["schedule_bias_pct"],
+        "expected_penalty_inr": rec["expected_penalty_at_optimal_inr"],
+        "expected_penalty_at_forecast_inr": rec["expected_penalty_at_forecast_inr"],
+        "penalty_savings_inr": rec["penalty_savings_inr"],
+        "bias_direction": rec["bias_direction"],
+        "normal_rate_used": nr
+    }
+
+
+def get_pooling_benefit(normal_rate: Optional[float] = None) -> Dict:
+    """
+    Compute DSM penalty pooling benefit across regions using active forecasts and actuals.
+    """
+    from src.pooling import compute_pooling_benefit
+    from src.penalties import DEFAULT_NORMAL_RATE
+    from src.hierarchy import REGION_MEMBERS
+
+    global _forecast_data
+    if _forecast_data is None:
+        load_forecasts()
+
+    nr = normal_rate if normal_rate is not None else DEFAULT_NORMAL_RATE
+
+    # Build state-level actuals and forecasts dictionaries
+    actuals_by_node = {}
+    forecasts_by_node = {}
+
+    for uid in get_available_nodes():
+        # Only bottom-level / state nodes
+        parts = uid.split("/")
+        if len(parts) == 3:
+            fcst_sub = _forecast_data[_forecast_data["unique_id"] == uid].sort_values("ds")
+            if len(fcst_sub) > 0:
+                forecasts_by_node[uid] = fcst_sub["reconciled_forecast"].values.astype(np.float64)
+                
+                # Check actuals
+                node_actuals = _actuals_lookup.get(uid, {})
+                actual_vals = []
+                for d in fcst_sub["ds"]:
+                    val = node_actuals.get(str(d))
+                    actual_vals.append(val if val is not None else float(fcst_sub[fcst_sub["ds"] == d]["reconciled_forecast"].iloc[0]))
+                actuals_by_node[uid] = np.array(actual_vals, dtype=np.float64)
+
+    if not actuals_by_node or not forecasts_by_node:
+        raise ValueError("Insufficient state-level forecast or actual data to compute pooling benefit.")
+
+    return compute_pooling_benefit(
+        actuals_by_node=actuals_by_node,
+        forecasts_by_node=forecasts_by_node,
+        normal_rate=nr
+    )

@@ -112,3 +112,101 @@ def verify_coherence(
     is_coherent = max_error < tolerance
 
     return is_coherent, max_error
+
+
+# ---------------------------------------------------------------------------
+# Cost-Aware Hierarchical Reconciliation
+# ---------------------------------------------------------------------------
+
+def reconcile_cost_aware(
+    reconciled_df: pd.DataFrame,
+    S_df: pd.DataFrame,
+    base_col: str = "LGBM/MinTrace_method-mint_shrink",
+    normal_rate: Optional[float] = None,
+    uncertainty_dict: Optional[Dict[str, float]] = None,
+) -> pd.DataFrame:
+    """
+    Cost-Aware Hierarchical Reconciliation under India CERC DSM deviation penalties.
+
+    Takes mathematically coherent MinT-Shrink forecasts and adjusts the bottom-level
+    forecasts with the cost-optimal scheduling quantile bias to protect against asymmetric
+    penalties, then projects back through the Summing Matrix S:
+        Y_cost_aware = S @ Y_cost_aware_bottom
+
+    This mathematically guarantees:
+    1. Exact hierarchy sum coherence (coherence error == 0.0)
+    2. Bottom-level and aggregate schedules are protected against expensive over-drawal deviations.
+
+    Parameters:
+      reconciled_df: DataFrame with reconciled forecasts (must contain unique_id, ds, and base_col)
+      S_df: Summing matrix DataFrame (columns = bottom level nodes, index = all nodes)
+      base_col: Source reconciled forecast column to adjust (default: MinT-Shrink)
+      normal_rate: Normal Rate in INR/MWh
+      uncertainty_dict: Optional {unique_id: std_dev_mw} dictionary
+    """
+    from src.penalties import optimal_schedule_quantile, DEFAULT_NORMAL_RATE
+    from scipy.stats import norm
+
+    nr = normal_rate if normal_rate is not None else DEFAULT_NORMAL_RATE
+    q_star = optimal_schedule_quantile(normal_rate=nr)
+    z_q = float(norm.ppf(q_star))  # ~0.066 for q* ≈ 0.5263
+
+    df_out = reconciled_df.copy()
+    cost_aware_col = "CostAware_MinT"
+
+    # S_df may have 'unique_id' as a column or as the index
+    if "unique_id" in S_df.columns:
+        all_uids = S_df["unique_id"].tolist()
+        bottom_uids = [c for c in S_df.columns if c != "unique_id"]
+        S_matrix = S_df[bottom_uids].values.astype(np.float64)
+    else:
+        all_uids = S_df.index.tolist()
+        bottom_uids = S_df.columns.tolist()
+        S_matrix = S_df.values.astype(np.float64)
+
+    timestamps = sorted(df_out["ds"].unique())
+
+    # Build matrix of bottom forecasts: shape (n_bottom, n_timestamps)
+    pivot_df = df_out.pivot(index="unique_id", columns="ds", values=base_col)
+    
+    # Ensure bottom nodes are present
+    missing_bottom = [b for b in bottom_uids if b not in pivot_df.index]
+    if missing_bottom:
+        # Fallback if pivot doesn't match
+        df_out[cost_aware_col] = df_out[base_col]
+        return df_out
+
+    Y_bottom = pivot_df.loc[bottom_uids, timestamps].values.astype(np.float64)
+
+    # Apply asymmetric newsvendor shift to bottom nodes:
+    # shift = z_q * std_dev
+    shifts = np.zeros(len(bottom_uids))
+    for idx, b_uid in enumerate(bottom_uids):
+        if uncertainty_dict and b_uid in uncertainty_dict:
+            std_val = uncertainty_dict[b_uid]
+        else:
+            # Default ~3% standard deviation relative to mean demand
+            mean_demand = np.mean(Y_bottom[idx, :])
+            std_val = max(1.0, 0.03 * mean_demand)
+        shifts[idx] = z_q * std_val
+
+    # Broadcast shift across timestamps
+    Y_bottom_cost_aware = Y_bottom + shifts[:, np.newaxis]
+
+    # Re-project through summing matrix S to guarantee exact coherence:
+    # Y_all = S @ Y_bottom_cost_aware
+    Y_all_cost_aware = S_matrix @ Y_bottom_cost_aware
+
+    # Flatten back into dictionary for fast lookup
+    cost_aware_map = {}
+    for row_idx, uid in enumerate(all_uids):
+        for col_idx, ts in enumerate(timestamps):
+            cost_aware_map[(uid, ts)] = float(Y_all_cost_aware[row_idx, col_idx])
+
+    # Assign column
+    df_out[cost_aware_col] = [
+        cost_aware_map.get((row["unique_id"], row["ds"]), row[base_col])
+        for _, row in df_out.iterrows()
+    ]
+
+    return df_out

@@ -4,6 +4,7 @@ import LoadingState from "../components/LoadingState";
 import ErrorState from "../components/ErrorState";
 
 const ALL_METHODS = [
+  "Cost-Aware MinT",
   "MinT-Shrink",
   "Bottom-Up",
   "Top-Down",

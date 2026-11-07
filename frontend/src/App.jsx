@@ -17,6 +17,7 @@ import ForecastPage from "./pages/ForecastPage";
 import EvaluationPage from "./pages/EvaluationPage";
 import TelemetryPage from "./pages/TelemetryPage";
 import AboutPage from "./pages/AboutPage";
+import SchedulePage from "./pages/SchedulePage";
 import {
   checkHealth,
   getHierarchyNodes,
@@ -375,6 +376,8 @@ export default function App() {
             onRetry={handleRetryNodeForecast}
           />
         )}
+
+        {activeTab === "schedule" && <SchedulePage />}
 
         {activeTab === "evaluation" && (
           <EvaluationPage

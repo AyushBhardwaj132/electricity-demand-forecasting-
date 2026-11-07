@@ -7,6 +7,7 @@ export default function Header({ activeTab, onSelectTab, apiConnected }) {
   const navItems = [
     { id: "home", label: "Home" },
     { id: "forecast", label: "Forecast" },
+    { id: "schedule", label: "Schedule Recommender" },
     { id: "evaluation", label: "Evaluation" },
     { id: "telemetry", label: "Telemetry" },
     { id: "about", label: "About" },
