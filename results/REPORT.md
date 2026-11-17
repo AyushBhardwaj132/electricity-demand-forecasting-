@@ -59,13 +59,47 @@ Pooled metrics across 6 rolling forecast origins (`2025-01-01` to `2025-06-01`):
 
 ---
 
-## 6. Reproducibility Commands
-```bash
-# 1. Run rolling-origin backtest (6 origins x 3 horizons x 4 methods)
-python -m src.backtest
+## 6. Milestone 2: Classical Time Series, Prophet & AutoTS Benchmark
 
-# 2. Run automated test suite
-pytest -v
+### 6.1 Stationarity & Parameter Justification
+- **Raw Series Augmented Dickey-Fuller (ADF)**: Statistic = **$-1.5788$** ($p = 0.4942$), non-stationary.
+- **First-Difference Series ADF ($\Delta y_t$)**: Statistic = **$-14.8693$** ($p = 1.67 \times 10^{-27}$), stationary ($d=1$).
+- **Parameters**: AR order $p \in \{2, 7\}$, differencing $d=1$, MA order $q \in \{2, 7\}$, seasonal period $s=7$ (weekly operational grid cycle).
+
+### 6.2 30-Day Out-of-Sample Benchmark Results
+
+Evaluated across the 30-day forecast horizon (`2026-08-27` to `2026-09-25`) against actual India aggregate demand:
+
+| Model | RMSE (MU) | MAE (MU) | MAPE (%) | Model Class |
+| :--- | :---: | :---: | :---: | :--- |
+| **AutoTS** | **120.79** | **92.18** | **1.69%** | AutoML Ensemble |
+| **ARMA(2, 2)** | 148.37 | 111.59 | 2.06% | Classical TS |
+| **Holt-Winters** | 154.21 | 116.76 | 2.17% | Classical TS |
+| **ARIMAX(2, 1, 2)** | 155.97 | 118.23 | 2.19% | Classical TS (with exog) |
+| **AR(7)** | 159.79 | 120.81 | 2.25% | Classical TS |
+| **ARIMA(2, 1, 2)** | 162.23 | 122.08 | 2.27% | Classical TS |
+| **VARIMA / VAR** | 163.74 | 126.82 | 2.35% | Multivariate (5 Regions) |
+| **SARIMA** | 173.63 | 129.65 | 2.42% | Classical TS |
+| **SARIMAX** | 173.63 | 129.65 | 2.42% | Classical TS (with exog) |
+| **Prophet** | 338.08 | 321.64 | 5.82% | Additive/Bayesian |
+| **MA(7)** | 1745.97 | 1700.79 | 31.02% | Classical TS |
+
+### 6.3 Milestone 2 Generated Artifacts
+- **Benchmark Script**: `src/run_milestone2.py`
+- **Metrics Table**: `results/milestone2_model_comparison.csv`
+- **EDA & Stationarity Plot**: `results/figures/milestone2_eda_stationarity.png`
+- **Forecast Curves Comparison**: `results/figures/milestone2_models_comparison.png`
+- **Error Metrics Bar Chart**: `results/figures/milestone2_metrics_barplot.png`
+
+---
+
+## 7. Reproducibility Commands
+```bash
+# 1. Run Milestone 2 time-series benchmark (Classical, Prophet, AutoTS)
+python src/run_milestone2.py
+
+# 2. Run rolling-origin backtest (6 origins x 3 horizons x 4 methods)
+python -m src.backtest
 
 # 3. Build frontend bundle
 cd frontend && npm run build
