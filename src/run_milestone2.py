@@ -241,6 +241,7 @@ def main():
 
         elif name == "autots":
             from autots import AutoTS
+            print("AutoTS is running genetic pipeline optimization (takes ~60-90 seconds, please wait)...", flush=True)
             autots_train = pd.DataFrame({"demand": train.values}, index=train.index)
             model_autots = AutoTS(
                 forecast_length=TEST_HORIZON,
@@ -381,7 +382,7 @@ def main():
     except Exception as e:
         print(f"Prophet failed: {e}")
 
-    print("[Model 11/11] Running AutoTS Automated Best-Model Search...")
+    print("[Model 11/11] Running AutoTS Automated Search (evaluating 200+ pipelines, takes ~60-90 seconds, please wait)...", flush=True)
     try:
         from autots import AutoTS
         autots_train = pd.DataFrame({"demand": train.values}, index=train.index)
